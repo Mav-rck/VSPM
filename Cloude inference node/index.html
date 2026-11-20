@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V.S.P.M. Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#101318;--panel:#171c23;--line:#2a323d;--text:#e7eaee;--mute:#8b96a5;
+--ok:#3ddc97;--warn:#ffb020;--crit:#ff5a5f;--idle:#5d6978;--x:#4cc9f0;--y:#b794ff;--z:#e7eaee}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line)}
+h1{font-size:1.15rem;font-weight:600;margin:0;letter-spacing:.01em}
+.meta{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;color:var(--mute);font-size:.85rem}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--idle);margin-right:6px}
+.dot.on{background:var(--ok)}.dot.err{background:var(--crit)}
+button{background:transparent;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:6px 12px;font:inherit;cursor:pointer}
+button:hover{border-color:var(--mute)}button:focus-visible{outline:2px solid var(--x);outline-offset:2px}
+button.on{background:var(--line)}
+.progress{padding:12px 24px;border-bottom:1px solid var(--line)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%;width:0;background:var(--x);transition:width .4s}
+main{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;padding:16px 24px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px;min-width:0}
+.card h2{font-size:.95rem;font-weight:600;margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.concl{grid-column:span 12;display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:20px;align-items:center;border-left:6px solid var(--idle)}
+.badge{font-size:2rem;font-weight:700;line-height:1.15}
+.sub{color:var(--mute);font-size:.9rem}
+.votes{display:flex;gap:18px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.votes b{font-weight:600}
+.c6{grid-column:span 6}
+.wrap{position:relative;height:280px}
+table{width:100%;border-collapse:collapse;font-size:.85rem;font-variant-numeric:tabular-nums}
+td,th{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;font-weight:400}
+th{color:var(--mute)}
+@media(max-width:860px){.c6{grid-column:span 12}.concl{grid-template-columns:1fr}main{padding:12px}}
+@media(prefers-reduced-motion:reduce){.bar>i{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>V.S.P.M. &mdash; Vibration Sensing &amp; Predictive Maintenance</h1>
+  <div class="meta">
+    <span><span id="dot" class="dot"></span><span id="conn">Connecting&hellip;</span></span>
+    <span>Updated: <span id="upd">&ndash;</span></span>
+    <button id="reset" type="button">Reset run</button>
+  </div>
+</header>
+<div class="progress">
+  <div class="meta" style="justify-content:space-between"><span id="ptxt">0 / 100 batches</span><span id="pstate">Idle</span></div>
+  <div class="bar"><i id="pbar"></i></div>
+</div>
+<main>
+  <section class="card concl" id="cc">
+    <div>
+      <div class="sub">Random Forest conclusion</div>
+      <div class="badge" id="badge">Awaiting Run</div>
+      <div class="sub" id="conf">Press the button on the ESP32 to start a run.</div>
+      <div class="sub" id="fin"></div>
+    </div>
+    <div>
+      <div class="sub">Votes across batches</div>
+      <div class="votes" id="votes"></div>
+      <div class="sub" id="hist" style="margin-top:10px"></div>
+    </div>
+  </section>
+  <section class="card c6"><h2>Votes and mean probability (%)</h2><div class="wrap"><canvas id="c1"></canvas></div></section>
+  <section class="card c6"><h2>RMS per batch</h2><div class="wrap"><canvas id="c2"></canvas></div></section>
+  <section class="card c6"><h2><span>Impulsiveness per batch</span>
+    <span><button type="button" data-m="kurt" class="t3 on">Kurtosis</button> <button type="button" data-m="crest" class="t3">Crest factor</button></span></h2>
+    <div class="wrap"><canvas id="c3"></canvas></div></section>
+  <section class="card c6"><h2><span>Run profile (mean and max)</span>
+    <span><button type="button" data-m="rms" class="t4 on">RMS</button> <button type="button" data-m="p2p" class="t4">Peak-to-peak</button> <button type="button" data-m="crest" class="t4">Crest</button> <button type="button" data-m="kurt" class="t4">Kurtosis</button></span></h2>
+    <div class="wrap"><canvas id="c4"></canvas></div></section>
+  <section class="card" style="grid-column:span 12"><h2>Recent runs</h2>
+    <table><thead><tr><th>Time (UTC)</th><th>Run</th><th>Batches</th><th>Conclusion</th><th>Confidence</th></tr></thead><tbody id="hbody"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const COL = ['#3ddc97', '#ffb020', '#ff5a5f'], IDLE = '#5d6978';
+const AX = {x: '#4cc9f0', y: '#b794ff', z: '#e7eaee'};
+let LAB = ['Healthy', 'Unbalance Warning', 'Critical Breakdown'], m3 = 'kurt', m4 = 'rms', last = null;
+Chart.defaults.color = '#8b96a5'; Chart.defaults.borderColor = '#2a323d'; Chart.defaults.maintainAspectRatio = false;
+Chart.defaults.animation = false;
+
+const mk = (id, cfg) => new Chart($(id), cfg);
+const lineDS = m => ['x', 'y', 'z'].map(a => ({label: a.toUpperCase() + ' ' + m, data: [], borderColor: AX[a], backgroundColor: AX[a], borderWidth: 1.5, pointRadius: 0, tension: .2}));
+const lineOpt = {scales: {x: {title: {display: true, text: 'Batch'}}}, interaction: {mode: 'index', intersect: false}};
+
+const c1 = mk('c1', {type: 'bar', data: {labels: LAB, datasets: [
+  {label: 'Votes %', data: [0, 0, 0], backgroundColor: COL},
+  {label: 'Mean probability %', data: [0, 0, 0], backgroundColor: COL.map(c => c + '66'), borderColor: COL, borderWidth: 1}]},
+  options: {indexAxis: 'y', scales: {x: {min: 0, max: 100}}}});
+const c2 = mk('c2', {type: 'line', data: {labels: [], datasets: lineDS('RMS')}, options: lineOpt});
+const c3 = mk('c3', {type: 'line', data: {labels: [], datasets: lineDS('kurtosis')}, options: lineOpt});
+const c4 = mk('c4', {type: 'bar', data: {labels: ['X', 'Y', 'Z'], datasets: [
+  {label: 'Mean', data: [0, 0, 0], backgroundColor: '#4cc9f0'},
+  {label: 'Max', data: [0, 0, 0], backgroundColor: '#b794ff'}]}});
+
+document.querySelectorAll('.t3').forEach(b => b.onclick = () => {
+  m3 = b.dataset.m; document.querySelectorAll('.t3').forEach(x => x.classList.toggle('on', x === b)); if (last) draw(last);});
+document.querySelectorAll('.t4').forEach(b => b.onclick = () => {
+  m4 = b.dataset.m; document.querySelectorAll('.t4').forEach(x => x.classList.toggle('on', x === b)); if (last) draw(last);});
+
+function setConn(ok, msg) {
+  $('dot').className = 'dot ' + (ok ? 'on' : 'err'); $('conn').textContent = msg;
+}
+
+function draw(s) {
+  last = s;
+  if (s.labels) LAB = s.labels;
+  const r = s.run, c = s.conclusion, t = s.telemetry;
+  const pct = Math.min(100, 100 * r.batches_received / Math.max(1, r.total_batches));
+  $('pbar').style.width = pct + '%';
+  $('ptxt').textContent = r.batches_received + ' / ' + r.total_batches + ' batches';
+  $('pstate').textContent = {idle: 'Idle', collecting: 'Collecting', completed: 'Completed'}[r.state] || r.state;
+  $('upd').textContent = new Date(s.updated).toLocaleTimeString();
+
+  const col = c.class_id === null ? IDLE : COL[c.class_id];
+  $('cc').style.borderLeftColor = col; $('badge').style.color = col; $('badge').textContent = c.label;
+  if (c.class_id === null) {
+    $('conf').textContent = s.model_loaded ? 'Press the button on the ESP32 to start a run.' : 'Model file not loaded on the server.';
+    $('fin').textContent = ''; $('votes').innerHTML = '';
+  } else {
+    $('conf').textContent = 'Confidence ' + (100 * c.confidence).toFixed(1) + '%';
+    $('fin').textContent = c.finalized ? 'Finalized (' + r.batches_received + '/' + r.total_batches + ' batches)' : 'Provisional (collecting\u2026)';
+    $('votes').innerHTML = LAB.map((l, i) => '<span><b style="color:' + COL[i] + '">' + l + '</b>: ' + c.vote_breakdown.counts[i] + '</span>').join('');
+  }
+  $('hist').textContent = '';
+
+  c1.data.datasets[0].data = c.vote_breakdown.percent;
+  c1.data.datasets[1].data = c.mean_probabilities.map(p => 100 * p);
+  c1.data.labels = LAB; c1.update('none');
+
+  c2.data.labels = t.batch; ['x', 'y', 'z'].forEach((a, i) => c2.data.datasets[i].data = t[a + '_rms'] || []); c2.update('none');
+  c3.data.labels = t.batch;
+  ['x', 'y', 'z'].forEach((a, i) => {c3.data.datasets[i].data = t[a + '_' + m3] || []; c3.data.datasets[i].label = a.toUpperCase() + ' ' + (m3 === 'kurt' ? 'kurtosis' : 'crest');});
+  c3.update('none');
+  const sm = s.summary;
+  c4.data.datasets[0].data = ['x', 'y', 'z'].map(a => (sm.mean || {})[a + '_' + m4] || 0);
+  c4.data.datasets[1].data = ['x', 'y', 'z'].map(a => (sm.max || {})[a + '_' + m4] || 0);
+  c4.update('none');
+
+  $('hbody').innerHTML = (s.history || []).map(h => '<tr><td>' + (h.timestamp || '').replace('T', ' ').slice(0, 19) + '</td><td>' + (h.run_id || '\u2013') +
+    '</td><td>' + h.batches + '</td><td style="color:' + (h.class_id === null ? IDLE : COL[h.class_id]) + '">' + h.label + '</td><td>' + (100 * h.confidence).toFixed(1) + '%</td></tr>').join('') ||
+    '<tr><td colspan="5" class="sub">No completed runs yet.</td></tr>';
+}
+
+async function poll() {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const res = await fetch('/latest-status', {signal: ctl.signal, cache: 'no-store'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    draw(await res.json()); setConn(true, 'Live');
+  } catch (e) {
+    setConn(false, 'Reconnecting (server may be waking up)\u2026');
+  } finally {
+    clearTimeout(to); setTimeout(poll, 1000);
+  }
+}
+
+$('reset').onclick = async () => {
+  try { await fetch('/reset', {method: 'POST'}); } catch (e) {}
+};
+poll();
+</script>
+</body>
+</html>
